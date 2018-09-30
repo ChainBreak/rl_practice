@@ -8,34 +8,29 @@ import torch.nn.functional as F
 class Actor(nn.Module):
     def __init__(self,input_size=None):
         super(Actor, self).__init__()
-        self.fc1 = nn.Linear(input_size,64)
-        self.fc2 = nn.Linear(64,32)
-        self.fc3 = nn.Linear(32,1)
+        self.fc1 = nn.Linear(3,256)
+        self.fc2 = nn.Linear(256,128)
+        self.fc3 = nn.Linear(128,1)
 
     def forward(self,x):
-        x = F.tanh(self.fc1(x))
-        x = F.tanh(self.fc2(x))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
         x = F.tanh(self.fc3(x))
         return x
 
-    def get_action(self,state):
-        x = torch.from_numpy(state).unsqueeze(dim=0).float()
-        x = self(x)
-        # print(x)
-        action = x.data.numpy()[0]
-        return action
 
 
 class Critic(nn.Module):
     def __init__(self,input_size=None):
         super(Critic, self).__init__()
-        self.fc1 = nn.Linear(input_size,64)
-        self.fc2 = nn.Linear(64,32)
-        self.fc3 = nn.Linear(32,1)
+        self.fc1 = nn.Linear(4,256)
+        self.fc2 = nn.Linear(256,128)
+        self.fc3 = nn.Linear(128,1)
 
-    def forward(self,x):
-        x = F.sigmoid(self.fc1(x))
-        x = F.sigmoid(self.fc2(x))
+    def forward(self,x_state,x_action):
+        x = torch.cat((x_state,x_action),dim=1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
 
