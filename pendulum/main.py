@@ -16,13 +16,20 @@ from smooth_noise import SmoothNoise
 class RL_Trainer():
 
     def __init__(self):
-        self.discount_factor = 0.99
-        self.num_steps = 1000000
-        self.reset_interval = 100
-        self.update_interval = 1
-        self.batch_size = 100
-        self.replay_buffer_length = 1000
 
+        self.num_steps = 1000000
+        self.reset_interval = 10000000
+        self.update_interval = 1
+        self.batch_size = 32
+        self.replay_buffer_length = 500
+        self.horizon_buffer_length = 50
+
+        #Calculate discount factor so that the horizon ends within the horizon_buffer
+        self.discount_factor = np.power(0.01,1.0/float(self.horizon_buffer_length))
+
+        print(self.discount_factor)
+
+        self.horizon_buffer = []
         self.replay_buffer = []
         self.env = PendulumEnv()
         self.noise = SmoothNoise((1,))
@@ -31,24 +38,14 @@ class RL_Trainer():
         self.actor = Actor()
         self.critic = Critic()
 
-        self.actor_target = Actor()
-        self.critic_target = Critic()
-
-        self.actor_optimizer = optim.Adam(self.actor.parameters(),   lr=0.0001)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.001)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(),   lr=0.01)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.1)
 
         self.actor_criterion = nn.MSELoss()
         self.critic_criterion = nn.MSELoss()
 
-        self.update_target(self.actor_target , self.actor, 1.0)
-        self.update_target(self.critic_target , self.critic, 1.0)
 
         self.env_reset()
-
-    def update_target(self,target_model,new_model,alpha):
-        with torch.no_grad():
-            for target_param, new_param in zip(target_model.parameters(), new_model.parameters()):
-                target_param += alpha * (new_param - target_param)
 
     def env_reset(self):
         state = self.env.reset()
@@ -89,8 +86,8 @@ class RL_Trainer():
             next_state_tensor = torch.tensor(next_state_np).float()
             reward_tensor = torch.tensor([reward_np]).float()
 
-            #append state action reward tuple to replay_buffer
-            self.replay_buffer.append((self.state_tensor, action_tensor, reward_tensor, next_state_tensor))
+            #append state action reward tuple to horizon_buffer
+            self.add_to_horizon_buffer((self.state_tensor, action_tensor, reward_tensor))
 
             #update state
             self.state_tensor = next_state_tensor
@@ -98,36 +95,25 @@ class RL_Trainer():
     def update_models(self):
         if len(self.replay_buffer) > self.batch_size:
             #limit the size of the replay buffer
-            over_size = len(self.replay_buffer) - self.replay_buffer_length
-            if over_size > 0:
-                del self.replay_buffer[:over_size]
+            # over_size = len(self.replay_buffer) - self.replay_buffer_length
+            # if over_size > 0:
+            #     del self.replay_buffer[:over_size]
 
             #take a batch sample from the replay buffer
             batch_list = random.sample(self.replay_buffer, self.batch_size)
-            state_batch, action_batch, reward_batch, next_state_batch = zip(*batch_list)
+            state_batch, action_batch, reward_batch = zip(*batch_list)
 
             #stack the batch into tensors
             state_batch_tensor = torch.stack(state_batch)
             action_batch_tensor = torch.stack(action_batch)
             reward_batch_tensor = torch.stack(reward_batch)
-            next_state_batch_tensor = torch.stack(next_state_batch)
 
-            #Calculate target Q for updating critic
-            with torch.no_grad():
-                #get the predicted action for the next state
-                next_action_batch_tensor = self.actor_target( next_state_batch_tensor )
-
-                #get the predicted q value for the next state
-                next_q_batch_tensor = self.critic_target( next_state_batch_tensor , next_action_batch_tensor)
-
-                #get the target q for this state
-                target_q_batch_tensor = reward_batch_tensor + self.discount_factor * next_q_batch_tensor
-                # print("target_q_batch_tensor",target_q_batch_tensor)
 
             #Update critic
             self.critic_optimizer.zero_grad()
             q_batch_tensor = self.critic(state_batch_tensor,action_batch_tensor)
-            critic_loss = self.critic_criterion(q_batch_tensor,target_q_batch_tensor)
+            critic_loss = self.critic_criterion(q_batch_tensor,reward_batch_tensor)
+            print("critic loss",critic_loss)
             critic_loss.backward()
             self.critic_optimizer.step()
 
@@ -141,9 +127,29 @@ class RL_Trainer():
             reward_prediction_mean.backward()
             self.actor_optimizer.step()
 
-            #slowly update the target networks
-            self.update_target(self.actor_target , self.actor, 0.001)
-            self.update_target(self.critic_target , self.critic, 0.001)
+
+    def add_to_horizon_buffer(self,experience_tuple):
+        self.horizon_buffer.insert(0,experience_tuple)
+
+        if len(self.horizon_buffer) > self.horizon_buffer_length:
+            discounted_reward_sum = 0.0
+
+            for state,action,reward in self.horizon_buffer:
+                discounted_reward_sum = reward + self.discount_factor * discounted_reward_sum
+            print(discounted_reward_sum)
+
+            del self.horizon_buffer[-1]
+
+            self.replay_buffer.insert(0,(state,action,discounted_reward_sum))
+
+        if len(self.replay_buffer) > self.replay_buffer_length:
+            del self.replay_buffer[-1]
+
+        print(len(self.horizon_buffer),len(self.replay_buffer))
+
+
+
+
 
     def enter_pressed(self):
         if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
