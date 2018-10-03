@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from smooth_noise import SmoothNoise
 
 class RL_Trainer():
@@ -18,14 +19,14 @@ class RL_Trainer():
     def __init__(self):
 
         self.num_steps = 1000000
-        self.reset_interval = 10000000
+        self.reset_interval = 500
         self.update_interval = 1
         self.batch_size = 32
-        self.replay_buffer_length = 500
-        self.horizon_buffer_length = 50
+        self.replay_buffer_length = 2000
+        self.horizon_buffer_length = 100
 
         #Calculate discount factor so that the horizon ends within the horizon_buffer
-        self.discount_factor = np.power(0.01,1.0/float(self.horizon_buffer_length))
+        self.discount_factor = 0.99# np.power(0.01,1.0/float(self.horizon_buffer_length))
 
         print(self.discount_factor)
 
@@ -38,8 +39,8 @@ class RL_Trainer():
         self.actor = Actor()
         self.critic = Critic()
 
-        self.actor_optimizer = optim.Adam(self.actor.parameters(),   lr=0.01)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.1)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(),   lr=0.0001)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.001)
 
         self.actor_criterion = nn.MSELoss()
         self.critic_criterion = nn.MSELoss()
@@ -52,6 +53,7 @@ class RL_Trainer():
         #scale the states between [0,1]
         state /= np.array([1,1,self.env.max_speed])
         self.state_tensor = torch.tensor(state).float()
+        del self.horizon_buffer[:]
 
     def env_step(self):
         with torch.no_grad():
@@ -59,7 +61,7 @@ class RL_Trainer():
             action_tensor = self.actor(self.state_tensor)
 
             #add noise to action tensor. Reduce the noise to zero at 100000 steps
-            noise = max((1.0 - float(self.i_step)/100000.0),0) * self.noise.sample()
+            noise = max((1.0 - float(self.i_step)/50000.0),0) * self.noise.sample()
 
             action_tensor += noise
 
@@ -94,37 +96,33 @@ class RL_Trainer():
 
     def update_models(self):
         if len(self.replay_buffer) > self.batch_size:
-            #limit the size of the replay buffer
-            # over_size = len(self.replay_buffer) - self.replay_buffer_length
-            # if over_size > 0:
-            #     del self.replay_buffer[:over_size]
 
-            #take a batch sample from the replay buffer
-            batch_list = random.sample(self.replay_buffer, self.batch_size)
-            state_batch, action_batch, reward_batch = zip(*batch_list)
+            states, actions, rewards = zip(*self.replay_buffer)
 
-            #stack the batch into tensors
+            reward_weight_np = np.array(rewards)
+            reward_weight_np -= np.min(reward_weight_np)
+            reward_weight_np /= np.sum(reward_weight_np)
+            # print(reward_weight_np)
+            sample_indexes = np.random.choice(len(reward_weight_np),self.batch_size,replace=True, p = reward_weight_np)
+
+
+
+            state_batch = [states[i] for i in sample_indexes]
+            action_batch = [actions[i] for i in sample_indexes]
+
+            #stack the batch into tensor
             state_batch_tensor = torch.stack(state_batch)
             action_batch_tensor = torch.stack(action_batch)
-            reward_batch_tensor = torch.stack(reward_batch)
-
-
-            #Update critic
-            self.critic_optimizer.zero_grad()
-            q_batch_tensor = self.critic(state_batch_tensor,action_batch_tensor)
-            critic_loss = self.critic_criterion(q_batch_tensor,reward_batch_tensor)
-            print("critic loss",critic_loss)
-            critic_loss.backward()
-            self.critic_optimizer.step()
 
             #Update Actor
             self.actor_optimizer.zero_grad()
-            action_batch_tensor = self.actor(state_batch_tensor)
-            reward_prediction = self.critic(state_batch_tensor,action_batch_tensor)
-            reward_prediction_mean = -torch.mean(reward_prediction)
-            if self.draw_env:
-                print(-reward_prediction_mean)
-            reward_prediction_mean.backward()
+
+            prediction_action_batch_tensor = self.actor(state_batch_tensor)
+            actor_loss = self.actor_criterion(prediction_action_batch_tensor,action_batch_tensor)
+            actor_loss.backward()
+
+            # for p in self.actor.parameters():
+            #     print(p.grad)
             self.actor_optimizer.step()
 
 
