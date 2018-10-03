@@ -13,8 +13,8 @@ class Actor(nn.Module):
         self.fc3 = nn.Linear(128,1)
 
     def forward(self,x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = F.sigmoid(self.fc1(x))
+        x = F.sigmoid(self.fc2(x))
         x = F.tanh(self.fc3(x))
         return x
 
