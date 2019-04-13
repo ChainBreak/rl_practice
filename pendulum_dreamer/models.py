@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,40 +6,67 @@ import torch.nn.functional as F
 
 
 class Actor(nn.Module):
-    def __init__(self):
-        super(Actor, self).__init__()
-        self.fc1 = nn.Linear(3,128)
+    """Takes in a state and predicts a action"""
+    def __init__(self,state_size,action_size):
+        super().__init__()
+        self.fc1 = nn.Linear(state_size,128)
+        self.fc2 = nn.Linear(128,128)
+        self.fc3 = nn.Linear(128,action_size)
+
+
+    def forward(self,x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = torch.tanh(self.fc3(x))
+        return x
+
+
+class Critic(nn.Module):
+    """Takes in a state and action and predicts Q value"""
+    def __init__(self,state_size,action_size):
+        super().__init__()
+        self.fc1 = nn.Linear(state_size,128)
+        self.fc2 = nn.Linear(128,128)
+        self.fc3 = nn.Linear(128,1)
+
+    def forward(self,state,action):
+        x = torch.cat((state,action),dim=1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
+class StateDreamer(nn.Module):
+    """Takes in a state and action and predicts the next state"""
+    def __init__(self,state_size,action_size):
+        super().__init__()
+        self.fc1 = nn.Linear(state_size + action_size, 128)
+        self.fc2 = nn.Linear(128,128)
+        self.fc3 = nn.Linear(128,state_size)
+
+    def forward(self,state,action):
+        x = torch.cat((state,action),dim=1)
+        x = F.tanh(self.fc1(x))
+        x = F.tanh(self.fc2(x))
+        x = F.tanh(self.fc3(x))
+        x += state
+        return x
+
+class RewardDreamer(nn.Module):
+    """Takes in a state and predicts the reward for being in that state"""
+    def __init__(self,state_size):
+        super().__init__()
+        self.fc1 = nn.Linear(state_size,128)
         self.fc2 = nn.Linear(128,128)
         self.fc3 = nn.Linear(128,1)
 
     def forward(self,x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.tanh(self.fc3(x))
+        x = self.fc3(x)
         return x
 
-class Model(nn.Module):
-    def __init__(self):
-        super(Model, self).__init__()
-        self.fc1 = nn.Linear(3,128)
-        self.fc2 = nn.Linear(128,128)
-        self.fc3 = nn.Linear(128,3)
-
-    def forward(self,x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.tanh(self.fc3(x))
-        return x
-
-class Loss(nn.Module):
-    def __init__(self,input_size=None):
-        super(Loss, self).__init__()
-        self.target = torch.tensor([1.0, 0.0, 0.0]).float()
-
-    def forward(self,x):
-        error = torch.sum((self.target - x)**2)
-
-        return error
 
 
 
