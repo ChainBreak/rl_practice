@@ -1,21 +1,35 @@
 
 import torch
-import torch.utils.data
+from torch.utils.data import Dataset, DataLoader
 import random
 
-class ReplayBuffer(torch.utils.data.Dataset):
+class ReplayBuffer(Dataset):
 
-    def __init__(self):
+    def __init__(self,max_size):
         self.replay_buffer = []
+        self.max_size = max_size
 
     def append(self,item):
         self.replay_buffer.append(item)
+        if len(self.replay_buffer) > self.max_size:
+            remove = int(self.max_size * 0.1)
+            self.replay_buffer = self.replay_buffer[remove:]
 
     def __len__(self):
         return len(self.replay_buffer)
         
     def __getitem__(self,index):
-        pass
+        state_tensor, action_tensor, next_state_tensor, reward_tensor = self.replay_buffer[index]
+
+        data = {
+            "state":state_tensor,
+            "next_state":next_state_tensor, 
+            "action":action_tensor, 
+            "reward":reward_tensor}
+
+        return data
+
+
     def get_random_batch(self,batch_size):
 
         #take a batch sample from the replay buffer

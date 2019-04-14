@@ -14,6 +14,7 @@ class SmoothNoise():
     def sample(self):
         self.x += self.return_speed * (self.mean-self.x) + np.random.normal(0,self.std,self.shape)
         return torch.tensor(self.x).float()
+        
 if __name__ == "__main__":
     print("Hello There")
     sn = SmoothNoise((1,))
