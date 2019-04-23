@@ -17,6 +17,7 @@ from gym.envs.classic_control.cartpole import CartPoleEnv
 
 logging.basicConfig(level=logging.INFO)
 
+
 class Actor(nn.Module):
     """This is our policy model. 
     It takes a state vector and returns probabilities of discrete actions"""
@@ -32,6 +33,7 @@ class Actor(nn.Module):
     def forward(self,state):
         action_probs = self.net(state)
         return action_probs
+
 
 class PolicyGradientAgent():
     
@@ -58,6 +60,7 @@ class PolicyGradientAgent():
         #Create optimiser used for update the model
         self.optimizer = optim.Adam(self.actor.parameters(),lr=0.02)
 
+
     def get_action(self,state_np):
         #no gradients allowed
         with torch.no_grad():
@@ -75,6 +78,7 @@ class PolicyGradientAgent():
 
             logging.debug("action probs: %s, action: %s",prob_tensor,action)
         return action
+
 
     def record_experience(self,state_np,action,reward,done):
         #accumulate the state action pairs for this episode
@@ -120,7 +124,7 @@ class PolicyGradientAgent():
         #Scale the reward tensor so that it has a mean of zero and a std of one.
         #It means that bad action become less likely as opposed to the good action just becomming more likely
         #This seemed to realy speed up training
-        rewards_tensor = (rewards_tensor - rewards_tensor.mean()) / (rewards_tensor.std() + 10e-6)
+        rewards_tensor = (rewards_tensor - rewards_tensor.mean())# / (rewards_tensor.std() + 10e-6)
 
         #Use the actor to get probibilites for each action. 
         #These will be that same as it predicted during the episode
@@ -154,14 +158,13 @@ class PolicyGradientAgent():
         logging.debug("loss: %s\n%s",      loss.shape, loss)
         
         
-
 if __name__ == "__main__":
 
-    #Create environment. Note that make actually wrappes the actual environment.
+    #Create environment. Note that make actually wraps the actual environment.
     #The wrapper will end an episode based on a time limit
-    env = gym.make("CartPole-v0") #state = [x,x_dot,theta,theta_dot], actions = [left_or_right] 0 = left 1 = right
+    # env = gym.make("CartPole-v0") #state = [x,x_dot,theta,theta_dot], actions = [left_or_right] 0 = left 1 = right
 
-    # env = CartPoleEnv() #instanciate the env directly, without the wrapper
+    env = CartPoleEnv() #instanciate the env directly, without the wrapper
 
     #get the state and action size from the environement
     state_size = env.observation_space.shape[0]
@@ -169,15 +172,17 @@ if __name__ == "__main__":
     
     #instanciate agent
     agent = PolicyGradientAgent(state_size, action_size)
-
+    
     done = True
     last_render_time = time.time()
-
+    episode_count = -1
     #forever
     while True:
         
         #if episode is done
         if done:
+            episode_count += 1
+            logging.info("Episode: %i",episode_count)
             #reset env
             state_np = env.reset()
             #set render flag based on time
