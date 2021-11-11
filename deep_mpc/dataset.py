@@ -31,7 +31,7 @@ class TransitionDataset(Dataset):
     def __getitem__(self,index):
 
         return {
-            "state"   : self.give_tensor[index],
+            "state"   : self.state_tensor[index],
             "action": self.action_tensor[index],
             "next_state" : self.next_state_tensor[index],
             "reward": self.reward_tensor[index],
