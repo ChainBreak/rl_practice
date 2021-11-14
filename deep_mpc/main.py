@@ -8,13 +8,14 @@ from dataset import TransitionDataset
 from model import LitModel
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from torch.utils.data import DataLoader, random_split
+from matplotlib import pyplot as plt
 
 def main():
     hparams = {
         "gym_env_name": "Pendulum-v0",
         "state_size": 3,
         "action_size": 1,
-        "num_collection_runs": 1000,
+        "num_collection_runs": 10000,
         "num_samples_per_run": 100,
 
         "max_epochs":10,
@@ -22,7 +23,7 @@ def main():
         "learning_rate":0.001,
         "weight_decay":0.0000,
 
-        "horizon_length":20,
+        "horizon_length":40,
         "test_episode_length": 1000,
 
     }
@@ -59,6 +60,8 @@ def run_experiment(hparams):
         callbacks=callback_list,
     )
     trainer.fit(model,train_dataloader,valid_dataloader )
+
+    # model = LitModel.load_from_checkpoint("lightning_logs/version_57/checkpoints/epoch=9-step=58599.ckpt")
 
     run_mpc(model,hparams)
 
@@ -114,31 +117,50 @@ def run_mpc(model,hparams):
 
             env.render()
             # action = env.action_space.sample()
-            next_state,reward, done, info = env.step(action) 
+            state,reward, done, info = env.step(action) 
 
 
 def get_optimal_action(model,current_state,hparams):
+    """Unrolls predicted states into the future and iteratively does backprop to find the best actions"""
+
     horizon_length = hparams["horizon_length"]
     action_size = hparams["action_size"]
-    solver_iterations = 20
+    solver_iterations = 10
 
+    # make a tensor of actions. one action for each timestep into the future
     action_tensor = nn.Parameter(torch.zeros(horizon_length,action_size))
-    optimizer = torch.optim.Adam([action_tensor],lr=0.1)
 
+    # Create optimiser that will change the actions
+    optimizer = torch.optim.SGD([action_tensor],lr=0.1,momentum=0.0)
+
+    # Tells the model to ingnore gradients for part model
     model.runtime = True
-    for i in range(solver_iterations):
-        state = current_state
 
+    # For solver iterations
+    for i in range(solver_iterations):
+        
+        # Start the roll out at the current real state
+        state = current_state
         reward_sum = 0
+        pred_state_list = []
         for step in range(horizon_length):
             action = action_tensor[step].unsqueeze(0)
             state,reward = model(state,action)
-
-            reward_sum += -reward
-
+            # print(action.tolist(),state.tolist(),reward.tolist())
+            pred_state_list.append(state)
+            reward_sum *= 0.9
+            reward_sum += reward
+        pred_state = torch.concat(pred_state_list)
+        plt.figure()
+        plt.plot(-pred_state[:,1].detach(),pred_state[:,0].detach())
+        plt.show()
         optimizer.zero_grad()
+        reward_sum = - reward_sum
         reward_sum.backward(retain_graph=True)
         optimizer.step()
+        action_tensor.data = action_tensor.data.clamp(-1.,1.)
+
+        # input()
     
     return action_tensor[0].cpu().detach().numpy()
 
