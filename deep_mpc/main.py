@@ -15,16 +15,19 @@ def main():
         "gym_env_name": "Pendulum-v0",
         "state_size": 3,
         "action_size": 1,
-        "num_collection_runs": 10000,
+        "num_collection_runs": 1000,
         "num_samples_per_run": 100,
 
         "max_epochs":10,
         "cosine_scheduler_max_epoch":10,
-        "learning_rate":0.001,
+        "learning_rate":0.01,
         "weight_decay":0.0000,
 
-        "horizon_length":40,
+        "horizon_length":20,
         "test_episode_length": 1000,
+
+        "checkpoint_path" : "lightning_logs/version_58/checkpoints/epoch=9-step=5859.ckpt",
+        "load_checkpoint" : True,
 
     }
 
@@ -33,35 +36,40 @@ def main():
 
 def run_experiment(hparams):
 
-    # Collect all the transition data
-    full_dataset = collect_dataset(hparams)
-
-    # Compute train and valid lenghts
-    train_length = int(len(full_dataset) * 0.75)
-    valid_length = len(full_dataset)-train_length
-
-    # Split out train and valid datasets
-    train_dataset,valid_dataset =  random_split(full_dataset, [train_length,valid_length])
-
-    train_dataloader = DataLoader(train_dataset,batch_size=128, shuffle=True)
-    valid_dataloader = DataLoader(valid_dataset,batch_size=128, shuffle=False)
-
-    model = LitModel(**hparams)
-    p = model.hparams
+    if hparams["load_checkpoint"]:
+        model = LitModel.load_from_checkpoint(hparams["checkpoint_path"])
+    else:
     
-    callback_list = [
-        # ModelCheckpoint(monitor="loss/valid",save_top_k=3),
-        LearningRateMonitor(logging_interval='step')
-    ]
 
-    trainer = pl.Trainer(
-        gpus=1,
-        max_epochs=p.max_epochs,
-        callbacks=callback_list,
-    )
-    trainer.fit(model,train_dataloader,valid_dataloader )
+        # Collect all the transition data
+        full_dataset = collect_dataset(hparams)
 
-    # model = LitModel.load_from_checkpoint("lightning_logs/version_57/checkpoints/epoch=9-step=58599.ckpt")
+        # Compute train and valid lenghts
+        train_length = int(len(full_dataset) * 0.75)
+        valid_length = len(full_dataset)-train_length
+
+        # Split out train and valid datasets
+        train_dataset,valid_dataset =  random_split(full_dataset, [train_length,valid_length])
+
+        train_dataloader = DataLoader(train_dataset,batch_size=128, shuffle=True)
+        valid_dataloader = DataLoader(valid_dataset,batch_size=128, shuffle=False)
+
+        model = LitModel(**hparams)
+        p = model.hparams
+        
+        callback_list = [
+            # ModelCheckpoint(monitor="loss/valid",save_top_k=3),
+            LearningRateMonitor(logging_interval='step')
+        ]
+
+        trainer = pl.Trainer(
+            gpus=1,
+            max_epochs=p.max_epochs,
+            callbacks=callback_list,
+        )
+        trainer.fit(model,train_dataloader,valid_dataloader )
+
+    
 
     run_mpc(model,hparams)
 
@@ -136,6 +144,7 @@ def get_optimal_action(model,current_state,hparams):
     # Tells the model to ingnore gradients for part model
     model.runtime = True
 
+    plt.figure()
     # For solver iterations
     for i in range(solver_iterations):
         
@@ -148,19 +157,25 @@ def get_optimal_action(model,current_state,hparams):
             state,reward = model(state,action)
             # print(action.tolist(),state.tolist(),reward.tolist())
             pred_state_list.append(state)
-            reward_sum *= 0.9
+            reward_sum *= 0.5
             reward_sum += reward
         pred_state = torch.concat(pred_state_list)
-        plt.figure()
-        plt.plot(-pred_state[:,1].detach(),pred_state[:,0].detach())
-        plt.show()
+        x=i/solver_iterations
+        rgba = (1-x,0,x,1)
+        plt.plot(-pred_state[:,1].detach(),pred_state[:,0].detach(), color=rgba)
+        
         optimizer.zero_grad()
-        reward_sum = - reward_sum
+        reward_sum =  -reward_sum
         reward_sum.backward(retain_graph=True)
         optimizer.step()
         action_tensor.data = action_tensor.data.clamp(-1.,1.)
 
+        print(action_tensor[0].cpu().detach().numpy())
+
         # input()
+    plt.xlim([-1.5,1.5])
+    plt.ylim([-1.5,1.5])
+    plt.show()
     
     return action_tensor[0].cpu().detach().numpy()
 
