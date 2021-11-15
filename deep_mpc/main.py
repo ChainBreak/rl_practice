@@ -18,15 +18,15 @@ def main():
         "num_collection_runs": 1000,
         "num_samples_per_run": 100,
 
-        "max_epochs":10,
-        "cosine_scheduler_max_epoch":10,
+        "max_epochs":30,
+        "cosine_scheduler_max_epoch":30,
         "learning_rate":0.01,
         "weight_decay":0.0000,
 
-        "horizon_length":20,
-        "test_episode_length": 1000,
+        "horizon_length":30,
+        "test_episode_length": 50,
 
-        "checkpoint_path" : "lightning_logs/version_58/checkpoints/epoch=9-step=5859.ckpt",
+        "checkpoint_path" : "lightning_logs/version_63/checkpoints/epoch=29-step=17579.ckpt",
         "load_checkpoint" : True,
 
     }
@@ -110,41 +110,44 @@ def run_mpc(model,hparams):
     gym_env_name = hparams["gym_env_name"]
     
     test_episode_length = hparams["test_episode_length"]
+    horizon_length = hparams["horizon_length"]
+    action_size = hparams["action_size"]
     state_size = hparams["state_size"]
 
     model.eval()
 
     env = gym.make(gym_env_name)
-
+    plt.figure()
     while True:
         state = env.reset()
+        action_tensor = torch.zeros(horizon_length,action_size)
         for step in range(test_episode_length):
 
             state_tensor = torch.tensor(state,dtype=torch.float).unsqueeze(0)
-            action = get_optimal_action(model,state_tensor,hparams)
+
+            action,action_tensor = get_optimal_action(model,state_tensor,action_tensor,hparams)
 
             env.render()
             # action = env.action_space.sample()
             state,reward, done, info = env.step(action) 
 
 
-def get_optimal_action(model,current_state,hparams):
+def get_optimal_action(model,current_state,action_tensor,hparams):
     """Unrolls predicted states into the future and iteratively does backprop to find the best actions"""
 
-    horizon_length = hparams["horizon_length"]
-    action_size = hparams["action_size"]
+    horizon_length = action_tensor.shape[0]
     solver_iterations = 10
 
     # make a tensor of actions. one action for each timestep into the future
-    action_tensor = nn.Parameter(torch.zeros(horizon_length,action_size))
+    action_parameter = nn.Parameter(action_tensor)
 
     # Create optimiser that will change the actions
-    optimizer = torch.optim.SGD([action_tensor],lr=0.1,momentum=0.0)
+    optimizer = torch.optim.Adam([action_parameter],lr=0.01)
 
     # Tells the model to ingnore gradients for part model
     model.runtime = True
 
-    plt.figure()
+    
     # For solver iterations
     for i in range(solver_iterations):
         
@@ -152,32 +155,35 @@ def get_optimal_action(model,current_state,hparams):
         state = current_state
         reward_sum = 0
         pred_state_list = []
+        
         for step in range(horizon_length):
-            action = action_tensor[step].unsqueeze(0)
+            action = action_parameter[step].unsqueeze(0)
             state,reward = model(state,action)
             # print(action.tolist(),state.tolist(),reward.tolist())
             pred_state_list.append(state)
-            reward_sum *= 0.5
+            reward_sum *= 0.01
             reward_sum += reward
         pred_state = torch.concat(pred_state_list)
         x=i/solver_iterations
         rgba = (1-x,0,x,1)
-        plt.plot(-pred_state[:,1].detach(),pred_state[:,0].detach(), color=rgba)
         
         optimizer.zero_grad()
         reward_sum =  -reward_sum
         reward_sum.backward(retain_graph=True)
         optimizer.step()
-        action_tensor.data = action_tensor.data.clamp(-1.,1.)
+        action_parameter.data = action_parameter.data.clamp(-1.,1.)
 
-        print(action_tensor[0].cpu().detach().numpy())
+        # print(action_parameter[0].cpu().detach().numpy())
 
+    plt.plot(-pred_state[:,1].detach(),pred_state[:,0].detach(), color=rgba)
         # input()
     plt.xlim([-1.5,1.5])
     plt.ylim([-1.5,1.5])
-    plt.show()
+    plt.draw()
+    plt.pause(0.001)
+    plt.clf()
     
-    return action_tensor[0].cpu().detach().numpy()
+    return action_parameter[0].cpu().detach().numpy(), action_parameter.data
 
         
     # time.sleep(5)

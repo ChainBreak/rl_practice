@@ -16,35 +16,19 @@ class LitModel(pl.LightningModule):
 
         self.criterion = torch.nn.MSELoss()
 
-        self.a_model = nn.Sequential(
-            nn.Linear(self.state_size,32),
-            nn.ReLU(),
+        self.transition_model = nn.Sequential(
+            nn.Linear(self.state_size+self.action_size,32),
+            nn.SiLU(),
             nn.Linear(32,32),
-            nn.ReLU(),
-            nn.Linear(32,32),
-            nn.ReLU(),
-            nn.Linear(32,self.state_size**2),
-        )
-
-        self.b_model = nn.Sequential(
-            nn.Linear(self.action_size,32),
-            nn.ReLU(),
-            nn.Linear(32,32),
-            nn.ReLU(),
-            nn.Linear(32,32),
-            nn.ReLU(),
-            nn.Linear(32,self.action_size**2),
+            nn.SiLU(),
+            nn.Linear(32,self.state_size),
         )
 
         self.reward_model = nn.Sequential(
-            nn.Linear(self.state_size,32),
-            nn.ReLU(),
+            nn.Linear(self.state_size+self.action_size,32),
+            nn.SiLU(),
             nn.Linear(32,32),
-            nn.ReLU(),
-            nn.Linear(32,32),
-            nn.ReLU(),
-            nn.Linear(32,32),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(32,1),
         )
 
@@ -57,22 +41,10 @@ class LitModel(pl.LightningModule):
 
     def forward(self,state,action):
 
-        a_matrix = self.a_model(state)
-        b_matrix = self.b_model(action)
-        reward = self.reward_model(state)
+        state_action = torch.cat([state,action],dim=1)
 
-        if self.runtime:
-            a_matrix = a_matrix.detach()
-            b_matrix = b_matrix.detach()
-
-        a_matrix = a_matrix.reshape(-1,self.state_size,self.state_size)
-        b_matrix = b_matrix.reshape(-1,self.action_size,self.action_size)
-        state = state.reshape(-1,self.state_size,1)
-        action = action.reshape(-1,self.action_size,1)
-
-        next_state = state + torch.bmm(a_matrix,state) + torch.bmm(b_matrix,action)
-
-        next_state = next_state.reshape(-1,self.state_size)
+        next_state = state + self.transition_model(state_action)
+        reward = self.reward_model(state_action)
 
         return next_state, reward
 
@@ -87,7 +59,7 @@ class LitModel(pl.LightningModule):
 
         loss_state = self.criterion(next_state,target_next_state)
         loss_reward = self.criterion(reward,target_reward)
-        loss = loss_state + 0.1*loss_reward
+        loss = loss_state + loss_reward
 
         self.log("loss_state/train",loss_state.item())
         self.log("loss_reward/train",loss_reward.item())
@@ -105,7 +77,7 @@ class LitModel(pl.LightningModule):
 
         loss_state = self.criterion(next_state,target_next_state)
         loss_reward = self.criterion(reward,target_reward)
-        loss = loss_state + 0.1*loss_reward
+        loss = loss_state + loss_reward
         
         self.log("loss_state/valid",loss_state.item())
         self.log("loss_reward/valid",loss_reward.item())
