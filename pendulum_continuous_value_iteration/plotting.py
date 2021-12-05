@@ -14,9 +14,9 @@ class PendulumPhasePlot():
         self.axis_1.set_xlabel("Angle (radians), 0 rads is facing down")
         self.axis_1.set_ylabel("Anglular Speed (radians)")
 
-    def plot_transition_dataset(self,transition_dataset):
-        states = transition_dataset.transition_tensors["state"].numpy()
-        next_states = transition_dataset.transition_tensors["next_state"].numpy()
+    def plot_transitions_on_phase_plot(self,state_tensor,next_state_tensor):
+        states = state_tensor.numpy()
+        next_states = next_state_tensor.numpy()
 
         theta = self.extract_theta_from_states(states)
         theta_dot = self.extract_theta_dot_from_states(states)

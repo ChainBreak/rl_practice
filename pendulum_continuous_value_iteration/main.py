@@ -19,8 +19,6 @@ def main():
         "num_collection_runs": 100,
         "num_samples_per_run": 100,
 
-
-
     }
 
     # Collect transition data from the simulator
@@ -28,7 +26,7 @@ def main():
     transition_tensors = transition_dataset.get_transition_tensors_dict()
     
     phase_plot = PendulumPhasePlot()
-    phase_plot.plot_transition_dataset(transition_dataset)
+    phase_plot.plot_transitions_on_phase_plot(transition_tensors["state"],transition_tensors["next_state"])
     
     # Instanciate models
     transition_model = TransitionModel()
@@ -40,18 +38,11 @@ def main():
     iterate_value_through_state_space( transition_model, value_model,transition_tensors)
     
 
-    # print(action_tensor)
+    best_next_state_tensor = get_best_next_state(transition_model, value_model,transition_tensors["state"])
 
-    # train transition model
+    phase_plot = PendulumPhasePlot()
+    phase_plot.plot_transitions_on_phase_plot(transition_tensors["state"],best_next_state_tensor)
 
-    # animate actions on phase diagram
-        
-    # iterate value
-        # get best action
-        # update value
-        # animate value moving around the phase space
-
-    # plot best actions
     pass
 
 def collect_transition_dataset(hparams):
@@ -87,6 +78,7 @@ def collect_transition_dataset(hparams):
 
     return transition_recorder.get_transition_dataset()
 
+
 def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors : dict):
     num_epochs = 50
     batch_size = 128
@@ -118,11 +110,11 @@ def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors
         print("Loss",sum(loss_list) / len(loss_list))
 
     return transition_model
-          
+        
 
 def find_best_action_for_every_state(state_tensor, transition_model, value_model):
     action_size = 1
-    batch_size = 128
+    batch_size = 1024
     num_optimizer_steps = 20
 
     num_states = len(state_tensor)
@@ -159,7 +151,7 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
     reward_tensor = transition_tensors["state_reward"]
 
     num_transitions = len(state_tensor)
-    batch_size = 10
+    batch_size = 1024
     num_iteration_steps = 100
     
     optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
@@ -195,10 +187,26 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
             loss.backward()
             optimizer.step()
 
+def get_best_next_state(transition_model, value_model,state_tensor):
 
+    
+    num_transitions = len(state_tensor)
+    batch_size = 1024
+    # Find the best action for every state given our current value funciton
+    best_action_tensor = find_best_action_for_every_state(state_tensor,transition_model,value_model)
 
+    best_next_state_tensor = torch.zeros_like(state_tensor)
+    with torch.no_grad():
+        for batch_indicies in tqdm(generate_batch_indicies(batch_size, num_transitions),desc="Value Iteration Batches"):
+            batch_state_tensor = state_tensor[batch_indicies]
+            batch_best_action_tensor = best_action_tensor[batch_indicies]
 
+            # Use our best action to step forward to the next best state
+            batch_best_next_state_tensor = transition_model(batch_state_tensor,batch_best_action_tensor)
 
+            best_next_state_tensor[batch_indicies] = batch_best_next_state_tensor
+
+    return best_next_state_tensor
 
 if __name__ == "__main__":
     main()
