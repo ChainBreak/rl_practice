@@ -30,6 +30,8 @@ class TransitionRecorder():
   
         return transition_dataset
 
+    
+
 
 
 class TransitionDataset(Dataset):
@@ -52,6 +54,9 @@ class TransitionDataset(Dataset):
             transition_tensors[name] = new_tensor
 
         return transition_tensors
+
+    def get_transition_tensors_dict(self):
+        return self.transition_tensors
 
 
     def __len__(self):
