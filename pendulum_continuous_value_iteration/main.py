@@ -23,10 +23,14 @@ def main():
 
     # Collect transition data from the simulator
     transition_dataset = collect_transition_dataset(hparams)
-    transition_tensors = transition_dataset.get_transition_tensors_dict()
+    num_states = len(transition_dataset["state"])
+    transition_dataset["best_action"] = torch.zeros(num_states,1)
+    transition_dataset["best_next_state"] = torch.zeros(num_states,3)
+    transition_dataset["best_next_value"] = torch.zeros(num_states,1)
+
     
     phase_plot = PendulumPhasePlot()
-    phase_plot.plot_transitions_on_phase_plot(transition_tensors["state"],transition_tensors["next_state"])
+    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["next_state"])
     
     # Instanciate models
     transition_model = TransitionModel()
@@ -35,20 +39,23 @@ def main():
     plot_value_on_phase_plot(value_model,"")
     
     # fit the transition model to the data
-    fit_transition_model_to_data(transition_model, transition_tensors)
+    fit_transition_model_to_data(transition_model, transition_dataset)
 
-    fit_value_model_to_data(value_model,transition_tensors)
+    update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
+  
+
+    fit_value_model_to_data(value_model,transition_dataset)
 
     plot_value_on_phase_plot(value_model,"")
 
-    iterate_value_through_state_space( transition_model, value_model,transition_tensors)
+    iterate_value_through_state_space( transition_model, value_model,transition_dataset)
     
-    
+    plot_value_on_phase_plot(value_model,"")
 
-    best_next_state_tensor = get_best_next_state(transition_model, value_model,transition_tensors["state"])
+    update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
 
     phase_plot = PendulumPhasePlot()
-    phase_plot.plot_transitions_on_phase_plot(transition_tensors["state"],best_next_state_tensor)
+    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["best_next_state"])
 
     pass
 
@@ -83,7 +90,7 @@ def collect_transition_dataset(hparams):
 
     env.close()
 
-    return transition_recorder.get_transition_dataset()
+    return transition_recorder.get_dict_of_tensors()
 
 
 def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors : dict):
@@ -118,38 +125,57 @@ def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors
 
     return transition_model
         
-
-def find_best_action_for_every_state(state_tensor, transition_model, value_model):
-    action_size = 1
-    batch_size = 1024
+def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
     num_optimizer_steps = 100
 
-    num_states = len(state_tensor)
+    batch_action_tensor = nn.Parameter(torch.zeros(len(batch_state_tensor),1 ))
 
-    action_tensor = torch.zeros(num_states, action_size)
+    optimizer = torch.optim.Adam([batch_action_tensor],lr=0.01)
+
+    for step_i in range(num_optimizer_steps):
+
+        next_state = transition_model(batch_state_tensor, batch_action_tensor)
+        next_state_value = value_model(next_state)
+
+        loss = -next_state_value.mean()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        batch_action_tensor.data = batch_action_tensor.data.clamp(-1.,1.)
+
+    return batch_action_tensor.data
+
+def update_dataset_with_next_best_state(transition_model, value_model, transition_dataset):
+
+    batch_size = 1024
+    
+    state_tensor = transition_dataset["state"]
+    best_action_tensor = transition_dataset["best_action"]
+    best_next_state_tensor = transition_dataset["best_next_state"]
+    best_next_value_tensor = transition_dataset["best_next_value"]
+    
+    num_states = len(state_tensor)
 
     for batch_indicies in generate_batch_indicies(batch_size, num_states):
         
         batch_state_tensor = state_tensor[batch_indicies]
-        batch_action_tensor = nn.Parameter(action_tensor[batch_indicies])
 
-        optimizer = torch.optim.Adam([batch_action_tensor],lr=0.01)
+        batch_best_action_tensor = find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor)
+        
+        with torch.no_grad():
+            batch_best_next_state_tensor = transition_model(batch_state_tensor,batch_best_action_tensor)
+            batch_best_next_value_tensor = value_model(batch_best_next_state_tensor)
 
-        for step_i in range(num_optimizer_steps):
-            next_state = transition_model(batch_state_tensor, batch_action_tensor)
-            next_state_value = value_model(next_state)
 
-            loss = -next_state_value.mean()
+        best_action_tensor[batch_indicies] = batch_best_action_tensor
+        best_next_state_tensor[batch_indicies] = batch_best_next_state_tensor
+        best_next_value_tensor[batch_indicies] = batch_best_next_value_tensor
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
 
-            batch_action_tensor.data = batch_action_tensor.data.clamp(-1.,1.)
+    # return action_tensor
 
-        action_tensor[batch_indicies] = batch_action_tensor.data
-
-    return action_tensor
 
 def fit_value_model_to_data(value_model,transition_tensors : dict):
     state_tensor = transition_tensors["state"]
@@ -180,10 +206,10 @@ def fit_value_model_to_data(value_model,transition_tensors : dict):
             optimizer.step()
 
 
-def iterate_value_through_state_space( transition_model, value_model,transition_tensors : dict):
+def iterate_value_through_state_space( transition_model, value_model,transition_dataset : dict):
     
-    state_tensor = transition_tensors["state"]
-    reward_tensor = transition_tensors["state_reward"]
+    state_tensor = transition_dataset["state"]
+    reward_tensor = transition_dataset["state_reward"]
 
     num_transitions = len(state_tensor)
     batch_size = 1024
@@ -192,37 +218,31 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
     optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
     criterion = nn.MSELoss()
 
-    for step_i in trange(num_iteration_steps,desc="Value Iteration Steps"):
+    for step_i in trange(num_iteration_steps, desc="Value Iteration Steps"):
 
-        # Find the best action for every state given our current value funciton
-        best_action_tensor = find_best_action_for_every_state(state_tensor,transition_model,value_model)
+        update_dataset_with_next_best_state(transition_model, value_model,transition_dataset)
+
+        best_next_value_tensor = transition_dataset["best_next_value"]
 
         for batch_indicies in tqdm(generate_batch_indicies(batch_size, num_transitions),desc="Value Iteration Batches"):
 
             batch_state_tensor = state_tensor[batch_indicies]
-            batch_best_action_tensor = best_action_tensor[batch_indicies]
-            batch_reward_tensor =reward_tensor[batch_indicies]
+            batch_reward_tensor = reward_tensor[batch_indicies]
 
-            with torch.no_grad():
-                # Use our best action to step forward to the next best state
-                batch_best_next_state_tensor = transition_model(batch_state_tensor,batch_best_action_tensor)
-
-                # Collect the value from the next best state
-                batch_best_next_value_tensor = value_model(batch_best_next_state_tensor)
-
-                batch_value_target_tensor = batch_best_next_value_tensor
-
+            batch_value_target_tensor = best_next_value_tensor[batch_indicies] + batch_reward_tensor
+            
             # compute the value for our current state
             batch_value_tensor = value_model(batch_state_tensor)
 
             # Try to make this value
             loss = criterion(batch_value_tensor, batch_value_target_tensor)
 
+            loss += 0.1 * batch_value_tensor.sum()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-        plot_value_on_phase_plot(value_model,"")
+        # plot_value_on_phase_plot(value_model,"")
 
 
 def get_best_next_state(transition_model, value_model,state_tensor):

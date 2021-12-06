@@ -30,6 +30,21 @@ class TransitionRecorder():
   
         return transition_dataset
 
+
+    def get_dict_of_tensors(self,):
+        transition_tensors = {}
+
+        for name, data in self.data_dict.items():
+
+            new_tensor = torch.tensor(data, dtype=torch.float32)
+
+            if len(new_tensor.shape)<=1:
+                new_tensor = new_tensor.unsqueeze(1)
+
+            transition_tensors[name] = new_tensor
+
+        return transition_tensors
+
     
 
 
