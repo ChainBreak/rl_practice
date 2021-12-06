@@ -24,6 +24,7 @@ def main():
     # Collect transition data from the simulator
     transition_dataset = collect_transition_dataset(hparams)
     num_states = len(transition_dataset["state"])
+    transition_dataset["state_value"] = transition_dataset["state_reward"].clone()
     transition_dataset["best_action"] = torch.zeros(num_states,1)
     transition_dataset["best_next_state"] = torch.zeros(num_states,3)
     transition_dataset["best_next_value"] = torch.zeros(num_states,1)
@@ -57,7 +58,6 @@ def main():
     phase_plot = PendulumPhasePlot()
     phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["best_next_state"])
 
-    pass
 
 def collect_transition_dataset(hparams):
     """Run the environment a few times and record all the transitions.
@@ -107,7 +107,7 @@ def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors
 
     for epoch_i in trange(num_epochs,desc="Transition Model Epochs"):
         loss_list = []
-        for batch_indicies in tqdm(generate_batch_indicies(batch_size, num_transitions),desc="Transition Model Batches"):
+        for batch_indicies in generate_batch_indicies(batch_size, num_transitions):
             batch_state_tensor = state_tensor[batch_indicies]
             batch_action_tensor =action_tensor[batch_indicies]
             batch_target_tensor =target_tensor[batch_indicies]
@@ -125,6 +125,34 @@ def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors
 
     return transition_model
         
+
+def fit_value_model_to_data(value_model,transition_tensors : dict):
+    state_tensor = transition_tensors["state"]
+    state_value_tensor = transition_tensors["state_value"]
+
+    num_states = len(state_tensor)
+    batch_size = 1024
+    num_iteration_steps = 100
+
+    optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
+    criterion = nn.MSELoss()
+
+    for step_i in trange(num_iteration_steps,desc="Value fitting epochs"):
+
+        for batch_indicies in generate_batch_indicies(batch_size, num_states):
+
+            batch_state_tensor = state_tensor[batch_indicies]
+            batch_value_target_tensor = state_value_tensor[batch_indicies]
+
+            # compute the value for our current state
+            batch_value_tensor = value_model(batch_state_tensor)
+
+            loss = criterion(batch_value_tensor, batch_value_target_tensor)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
 def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
     num_optimizer_steps = 100
 
@@ -174,36 +202,6 @@ def update_dataset_with_next_best_state(transition_model, value_model, transitio
         best_next_value_tensor[batch_indicies] = batch_best_next_value_tensor
 
 
-    # return action_tensor
-
-
-def fit_value_model_to_data(value_model,transition_tensors : dict):
-    state_tensor = transition_tensors["state"]
-    reward_tensor = transition_tensors["state_reward"]
-
-    num_states = len(state_tensor)
-    batch_size = 1024
-    num_iteration_steps = 100
-
-    optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
-    criterion = nn.MSELoss()
-
-    for step_i in trange(num_iteration_steps,desc="Value Reward Iteration Steps"):
-
-        for batch_indicies in tqdm(generate_batch_indicies(batch_size, num_states),desc="Value Reward Iteration Batches"):
-            batch_state_tensor = state_tensor[batch_indicies]
-            batch_reward_tensor = reward_tensor[batch_indicies]
-
-
-            # compute the value for our current state
-            batch_value_tensor = value_model(batch_state_tensor)
-
-            # Try to make this value
-            loss = criterion(batch_value_tensor, batch_reward_tensor)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
 
 
 def iterate_value_through_state_space( transition_model, value_model,transition_dataset : dict):
@@ -213,7 +211,7 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
 
     num_transitions = len(state_tensor)
     batch_size = 1024
-    num_iteration_steps = 100
+    num_iteration_steps = 20
     
     optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
     criterion = nn.MSELoss()
@@ -222,25 +220,9 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
 
         update_dataset_with_next_best_state(transition_model, value_model,transition_dataset)
 
-        best_next_value_tensor = transition_dataset["best_next_value"]
+        transition_dataset["state_value"] = transition_dataset["state_reward"] + transition_dataset["best_next_value"]
 
-        for batch_indicies in tqdm(generate_batch_indicies(batch_size, num_transitions),desc="Value Iteration Batches"):
-
-            batch_state_tensor = state_tensor[batch_indicies]
-            batch_reward_tensor = reward_tensor[batch_indicies]
-
-            batch_value_target_tensor = best_next_value_tensor[batch_indicies] + batch_reward_tensor
-            
-            # compute the value for our current state
-            batch_value_tensor = value_model(batch_state_tensor)
-
-            # Try to make this value
-            loss = criterion(batch_value_tensor, batch_value_target_tensor)
-
-            loss += 0.1 * batch_value_tensor.sum()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        fit_value_model_to_data(value_model,transition_dataset)
 
         # plot_value_on_phase_plot(value_model,"")
 
