@@ -31,37 +31,35 @@ def main():
 
     
     phase_plot = PendulumPhasePlot()
-    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["next_state"])
+    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["next_state"],"figures/raw_transitions.png")
     
     # Instanciate models
     transition_model = TransitionModel()
     value_model = ValueModel()
 
-    plot_value_on_phase_plot(value_model,"")
+    plot_value_on_phase_plot(value_model,"figures/value_random_weights.png")
     
     # fit the transition model to the data
     fit_transition_model_to_data(transition_model, transition_dataset)
 
     update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
   
-
     fit_value_model_to_data(value_model,transition_dataset)
 
-    plot_value_on_phase_plot(value_model,"")
+    plot_value_on_phase_plot(value_model,"figures/value_rewards_only.png")
 
     iterate_value_through_state_space( transition_model, value_model,transition_dataset)
     
-    plot_value_on_phase_plot(value_model,"")
+    plot_value_on_phase_plot(value_model,"figures/value_final.png")
 
     update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
 
     phase_plot = PendulumPhasePlot()
-    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["best_next_state"])
+    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["best_next_state"],"figures/best_transitions.png")
 
 
 def collect_transition_dataset(hparams):
     """Run the environment a few times and record all the transitions.
-    Wrap the transitions in a dataset class so it can be used for training
     """
     num_collection_runs = hparams["num_collection_runs"]
     num_samples_per_run = hparams["num_samples_per_run"]
@@ -152,6 +150,7 @@ def fit_value_model_to_data(value_model,transition_tensors : dict):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            
 
 def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
     num_optimizer_steps = 100
@@ -224,31 +223,9 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
 
         fit_value_model_to_data(value_model,transition_dataset)
 
-        # plot_value_on_phase_plot(value_model,"")
+        plot_value_on_phase_plot(value_model,f"figures/value_step_{step_i}.png")
 
 
-def get_best_next_state(transition_model, value_model,state_tensor):
-
-    
-    num_transitions = len(state_tensor)
-    batch_size = 1024
-    # Find the best action for every state given our current value funciton
-    best_action_tensor = find_best_action_for_every_state(state_tensor,transition_model,value_model)
-
-    best_next_state_tensor = torch.zeros_like(state_tensor)
-    with torch.no_grad():
-        for batch_indicies in tqdm(generate_batch_indicies(batch_size, num_transitions),desc="Value Iteration Batches"):
-            batch_state_tensor = state_tensor[batch_indicies]
-            batch_best_action_tensor = best_action_tensor[batch_indicies]
-
-            print(batch_best_action_tensor)
-
-            # Use our best action to step forward to the next best state
-            batch_best_next_state_tensor = transition_model(batch_state_tensor,batch_best_action_tensor)
-
-            best_next_state_tensor[batch_indicies] = batch_best_next_state_tensor
-
-    return best_next_state_tensor
 
 if __name__ == "__main__":
     main()

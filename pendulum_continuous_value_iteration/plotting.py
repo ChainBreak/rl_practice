@@ -7,7 +7,7 @@ class PendulumPhasePlot():
 
     def __init__(self):
 
-        self.figure, self.axis_1 = plt.subplots()
+        self.figure, self.axis_1 = plt.subplots(figsize=(16,9))
 
         self.set_axis_1_layout_settings()
 
@@ -16,7 +16,7 @@ class PendulumPhasePlot():
         self.axis_1.set_xlabel("Angle (radians), 0 rads is facing down")
         self.axis_1.set_ylabel("Anglular Speed (radians)")
 
-    def plot_transitions_on_phase_plot(self,state_tensor,next_state_tensor):
+    def plot_transitions_on_phase_plot(self,state_tensor,next_state_tensor,output_file):
         states = state_tensor.numpy()
         next_states = next_state_tensor.numpy()
 
@@ -37,7 +37,9 @@ class PendulumPhasePlot():
 
         self.axis_1.quiver(theta,theta_dot,theta_diff,theta_dot_diff, angles="xy",scale_units='xy',scale=1,width=0.0005)
 
-        plt.show()
+        self.figure.savefig(output_file,dpi=120)
+        plt.close(self.figure)
+
 
     
     def extract_theta_from_states(self,states):
@@ -96,7 +98,7 @@ def plot_value_on_phase_plot(value_model,output_file):
     
     value_image = render_value_image(value_model,width,height)
 
-    figure, axes_1 = plt.subplots()
+    fig, axes_1 = plt.subplots(figsize=(16,9))
 
 
     axes_1.set_xticks( np.linspace(0,width-1, 5) )
@@ -110,4 +112,5 @@ def plot_value_on_phase_plot(value_model,output_file):
 
   
     axes_1.imshow(value_image)
-    plt.show()
+    fig.savefig(output_file,dpi=120)
+    plt.close(fig)
