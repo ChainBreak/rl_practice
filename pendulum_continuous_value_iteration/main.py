@@ -11,18 +11,20 @@ from batching import generate_batch_indicies
 
 from models.transition_model import TransitionModel
 from models.value_model import ValueModel
+from models.actor_model import ActorModel
 
 
 def main():
     hparams = {
 
-        "num_collection_runs": 100,
+        "num_collection_runs": 200,
         "num_samples_per_run": 100,
 
     }
 
     # Collect transition data from the simulator
     transition_dataset = collect_transition_dataset(hparams)
+
     num_states = len(transition_dataset["state"])
     transition_dataset["state_value"] = transition_dataset["state_reward"].clone()
     transition_dataset["best_action"] = torch.zeros(num_states,1)
@@ -36,13 +38,14 @@ def main():
     # Instanciate models
     transition_model = TransitionModel()
     value_model = ValueModel()
+    actor_model = ActorModel()
 
     plot_value_on_phase_plot(value_model,"figures/value_random_weights.png")
     
     # fit the transition model to the data
     fit_transition_model_to_data(transition_model, transition_dataset)
 
-    update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
+    # update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
   
     fit_value_model_to_data(value_model,transition_dataset)
 
@@ -56,6 +59,11 @@ def main():
 
     phase_plot = PendulumPhasePlot()
     phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["best_next_state"],"figures/best_transitions.png")
+
+    fit_actor_model_to_data(actor_model, transition_dataset)
+
+    run_actor_in_environment(actor_model)
+
 
 
 def collect_transition_dataset(hparams):
@@ -129,8 +137,8 @@ def fit_value_model_to_data(value_model,transition_tensors : dict):
     state_value_tensor = transition_tensors["state_value"]
 
     num_states = len(state_tensor)
-    batch_size = 1024
-    num_iteration_steps = 100
+    batch_size = 128
+    num_iteration_steps = 50
 
     optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
     criterion = nn.MSELoss()
@@ -150,7 +158,7 @@ def fit_value_model_to_data(value_model,transition_tensors : dict):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
+
 
 def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
     num_optimizer_steps = 100
@@ -173,6 +181,7 @@ def find_best_action_for_batch_of_states(transition_model, value_model, batch_st
         batch_action_tensor.data = batch_action_tensor.data.clamp(-1.,1.)
 
     return batch_action_tensor.data
+
 
 def update_dataset_with_next_best_state(transition_model, value_model, transition_dataset):
 
@@ -201,8 +210,6 @@ def update_dataset_with_next_best_state(transition_model, value_model, transitio
         best_next_value_tensor[batch_indicies] = batch_best_next_value_tensor
 
 
-
-
 def iterate_value_through_state_space( transition_model, value_model,transition_dataset : dict):
     
     state_tensor = transition_dataset["state"]
@@ -210,7 +217,7 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
 
     num_transitions = len(state_tensor)
     batch_size = 1024
-    num_iteration_steps = 20
+    num_iteration_steps = 100
     
     optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
     criterion = nn.MSELoss()
@@ -226,6 +233,57 @@ def iterate_value_through_state_space( transition_model, value_model,transition_
         plot_value_on_phase_plot(value_model,f"figures/value_step_{step_i}.png")
 
 
+def fit_actor_model_to_data(actor_model, transition_dataset : dict):
+    state_tensor = transition_dataset["state"]
+    best_action_tensor = transition_dataset["best_action"]
+
+    num_states = len(state_tensor)
+    batch_size = 128
+    num_epochs = 100
+
+    optimizer = torch.optim.Adam(actor_model.parameters(),lr=0.001)
+    criterion = nn.MSELoss()
+
+    for step_i in trange(num_epochs,desc="Action fitting epochs"):
+
+        for batch_indicies in generate_batch_indicies(batch_size, num_states):
+
+            batch_state_tensor = state_tensor[batch_indicies]
+            batch_best_action_tensor = best_action_tensor[batch_indicies]
+
+            batch_action_tensor = actor_model(batch_state_tensor)
+
+            loss = criterion(batch_action_tensor, batch_best_action_tensor)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+
+def run_actor_in_environment(actor_model):
+    
+    num_samples_per_run = 1000
+    
+    env = PendulumEnv()
+
+    while True:
+
+        state = env.reset()
+
+        for _ in range(num_samples_per_run):
+            env.render()
+            state_tensor = torch.tensor(state).unsqueeze(0)
+
+            with torch.no_grad():
+                action_tensor = actor_model(state_tensor)
+
+            action = action_tensor.squeeze(0).numpy()
+
+            state, state_reward, action_cost = env.step(action) # take a random action
+
+            
+
+    env.close()
 
 if __name__ == "__main__":
     main()
