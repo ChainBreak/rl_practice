@@ -111,6 +111,7 @@ def plot_value_on_phase_plot(value_model,output_file):
     axes_1.set_ylabel("Anglular Speed (radians)")
 
   
-    axes_1.imshow(value_image)
+    plot = axes_1.imshow(value_image)
+    fig.colorbar(plot)
     fig.savefig(output_file,dpi=120)
     plt.close(fig)
