@@ -11,6 +11,7 @@ class TransitionDataset(Dataset):
 
         self.length = self.get_number_of_transions_from_tensors(self.transition_data)
 
+
     def get_number_of_transions_from_tensors(self,transition_data):
         first_key = list(self.transition_data.keys())[0]
         return len(self.transition_data[first_key])
@@ -18,6 +19,7 @@ class TransitionDataset(Dataset):
 
     def __len__(self):
         return self.length
-    
+        
+            
     def __getitem__(self,index):
         return { key : tensor[index] for key, tensor in self.transition_data.items() }
