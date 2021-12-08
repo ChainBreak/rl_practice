@@ -162,6 +162,7 @@ def fit_value_model_to_data(value_model,transition_tensors : dict):
 
 def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
     num_optimizer_steps = 100
+    max_action = 2.0
 
     batch_action_tensor = nn.Parameter(torch.zeros(len(batch_state_tensor),1 ))
 
@@ -178,7 +179,7 @@ def find_best_action_for_batch_of_states(transition_model, value_model, batch_st
         loss.backward()
         optimizer.step()
 
-        batch_action_tensor.data = batch_action_tensor.data.clamp(-1.,1.)
+        batch_action_tensor.data = batch_action_tensor.data.clamp(-max_action,max_action)
 
     return batch_action_tensor.data
 
