@@ -5,7 +5,10 @@ from env.pendulum import PendulumEnv
 from tqdm import trange, tqdm
 import gym
 
-from transition_dataset import TransitionRecorder
+from torch.utils.data import DataLoader, random_split
+
+from transition_recorder import TransitionRecorder
+from transition_dataset import TransitionDataset
 from plotting import PendulumPhasePlot, plot_value_on_phase_plot
 from batching import generate_batch_indicies
 
@@ -17,7 +20,7 @@ from models.actor_model import ActorModel
 def main():
     hparams = {
 
-        "num_collection_runs": 200,
+        "num_collection_runs": 20,
         "num_samples_per_run": 100,
 
     }
@@ -44,8 +47,6 @@ def main():
     
     # fit the transition model to the data
     fit_transition_model_to_data(transition_model, transition_dataset)
-
-    # update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
   
     fit_value_model_to_data(value_model,transition_dataset)
 
@@ -98,8 +99,40 @@ def collect_transition_dataset(hparams):
 
     return transition_recorder.get_dict_of_tensors()
 
+def split_dataset_into_train_and_valid(full_dataset):
+
+    valid_ratio = 0.25
+
+    # Compute train and valid lenghts
+    valid_length = int(len(full_dataset) * valid_ratio)
+    train_length = len(full_dataset)-valid_length
+
+    # Split out train and valid datasets
+    train_dataset, valid_dataset =  random_split(full_dataset, [train_length,valid_length])
+
+    return train_dataset, valid_dataset
+
+def get_train_valid_dataloaders(full_dataset):
+
+    batch_size = 10
+    train_dataset, valid_dataset = split_dataset_into_train_and_valid(full_dataset)
+
+    train_dataloader = DataLoader(train_dataset,batch_size=batch_size, shuffle=True)
+    valid_dataloader = DataLoader(valid_dataset,batch_size=batch_size, shuffle=False)
+
+    return train_dataloader, valid_dataloader
 
 def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors : dict):
+
+    full_dataset = TransitionDataset(transition_tensors, ["state", "action","next_state"])
+
+    train_dataloader, valid_dataloader = get_train_valid_dataloaders(full_dataset)
+
+    for batch in train_dataloader:
+        print(batch)
+        input()
+
+
     num_epochs = 50
     batch_size = 128
     num_transitions = len(transition_tensors["state"])
@@ -162,6 +195,7 @@ def fit_value_model_to_data(value_model,transition_tensors : dict):
 
 def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
     num_optimizer_steps = 100
+    max_action = 2.0
 
     batch_action_tensor = nn.Parameter(torch.zeros(len(batch_state_tensor),1 ))
 
@@ -178,7 +212,7 @@ def find_best_action_for_batch_of_states(transition_model, value_model, batch_st
         loss.backward()
         optimizer.step()
 
-        batch_action_tensor.data = batch_action_tensor.data.clamp(-1.,1.)
+        batch_action_tensor.data = batch_action_tensor.data.clamp(-max_action,max_action)
 
     return batch_action_tensor.data
 
