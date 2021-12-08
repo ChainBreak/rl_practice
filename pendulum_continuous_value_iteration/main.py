@@ -5,20 +5,55 @@ from env.pendulum import PendulumEnv
 from tqdm import trange, tqdm
 import gym
 
-from transition_dataset import TransitionRecorder
+from torch.utils.data import DataLoader, random_split
+
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+
+from transition_recorder import TransitionRecorder
+from transition_dataset import TransitionDataset
 from plotting import PendulumPhasePlot, plot_value_on_phase_plot
 from batching import generate_batch_indicies
 
-from models.transition_model import TransitionModel
-from models.value_model import ValueModel
-from models.actor_model import ActorModel
+from models.transition_model import LitTransitionModel
+from models.value_model import LitValueModel
+from models.actor_model import LitActorModel
 
 
 def main():
     hparams = {
 
-        "num_collection_runs": 200,
-        "num_samples_per_run": 100,
+        "num_collection_runs": 800,
+        "num_samples_per_run": 30,
+
+        "transition_model":
+        {
+            "learning_rate":0.01,
+            "cosine_annealing_t_max" : 100,
+            "max_epochs" : 100,
+            "batch_size" : 128,
+            "patience" : 10,
+        },
+
+        "value_iteration_steps" : 30,
+
+        "value_model":
+        {
+            "learning_rate":0.01,
+            "cosine_annealing_t_max" : 200,
+            "max_epochs" : 200,
+            "batch_size" : 128,
+            "patience" : 10,
+        },
+
+        "actor_model":
+        {
+            "learning_rate":0.01,
+            "cosine_annealing_t_max" : 200,
+            "max_epochs" : 200,
+            "batch_size" : 128,
+            "patience" : 10,
+        },
 
     }
 
@@ -36,22 +71,20 @@ def main():
     phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["next_state"],"figures/raw_transitions.png")
     
     # Instanciate models
-    transition_model = TransitionModel()
-    value_model = ValueModel()
-    actor_model = ActorModel()
+    transition_model = LitTransitionModel(**hparams["transition_model"])
+    value_model = LitValueModel(**hparams["value_model"])
+    actor_model = LitActorModel(**hparams["actor_model"])
 
     plot_value_on_phase_plot(value_model,"figures/value_random_weights.png")
     
     # fit the transition model to the data
-    fit_transition_model_to_data(transition_model, transition_dataset)
-
-    # update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
+    fit_transition_model_to_data(transition_model, transition_dataset, hparams)
   
-    fit_value_model_to_data(value_model,transition_dataset)
+    fit_value_model_to_data(value_model,transition_dataset,hparams)
 
     plot_value_on_phase_plot(value_model,"figures/value_rewards_only.png")
 
-    iterate_value_through_state_space( transition_model, value_model,transition_dataset)
+    iterate_value_through_state_space( transition_model, value_model,transition_dataset,hparams)
     
     plot_value_on_phase_plot(value_model,"figures/value_final.png")
 
@@ -60,7 +93,7 @@ def main():
     phase_plot = PendulumPhasePlot()
     phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["best_next_state"],"figures/best_transitions.png")
 
-    fit_actor_model_to_data(actor_model, transition_dataset)
+    fit_actor_model_to_data(actor_model, transition_dataset, hparams)
 
     run_actor_in_environment(actor_model)
 
@@ -98,66 +131,71 @@ def collect_transition_dataset(hparams):
 
     return transition_recorder.get_dict_of_tensors()
 
+def split_dataset_into_train_and_valid(full_dataset):
 
-def fit_transition_model_to_data(transition_model: nn.Module ,transition_tensors : dict):
-    num_epochs = 50
-    batch_size = 128
-    num_transitions = len(transition_tensors["state"])
+    valid_ratio = 0.25
 
-    state_tensor = transition_tensors["state"]
-    action_tensor = transition_tensors["action"] 
-    target_tensor = transition_tensors["next_state"]
+    # Compute train and valid lenghts
+    valid_length = int(len(full_dataset) * valid_ratio)
+    train_length = len(full_dataset)-valid_length
 
-    optimizer = torch.optim.Adam(transition_model.parameters(),lr=0.001)
-    criterion = nn.MSELoss()
+    # Split out train and valid datasets
+    train_dataset, valid_dataset =  random_split(full_dataset, [train_length,valid_length])
 
-    for epoch_i in trange(num_epochs,desc="Transition Model Epochs"):
-        loss_list = []
-        for batch_indicies in generate_batch_indicies(batch_size, num_transitions):
-            batch_state_tensor = state_tensor[batch_indicies]
-            batch_action_tensor =action_tensor[batch_indicies]
-            batch_target_tensor =target_tensor[batch_indicies]
+    return train_dataset, valid_dataset
 
-            batch_pred_next_state = transition_model( batch_state_tensor, batch_action_tensor)
+def get_train_and_valid_dataloaders(full_dataset,batch_size):
 
-            loss = criterion(batch_pred_next_state, batch_target_tensor)
+    train_dataset, valid_dataset = split_dataset_into_train_and_valid(full_dataset)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            loss_list.append(loss.item())
+    train_dataloader = DataLoader(train_dataset,batch_size=batch_size, shuffle=True)
+    valid_dataloader = DataLoader(valid_dataset,batch_size=batch_size, shuffle=False)
 
-        print("Loss",sum(loss_list) / len(loss_list))
+    return train_dataloader, valid_dataloader
 
-    return transition_model
+def fit_transition_model_to_data(transition_model: pl.LightningModule ,transition_tensors : dict, hparams: dict):
+    max_epochs = hparams["transition_model"]["max_epochs"]
+    batch_size = hparams["transition_model"]["batch_size"]
+    patience   = hparams["transition_model"]["patience"]
+
+    full_dataset = TransitionDataset(transition_tensors, ["state", "action","next_state"])
+
+    train_dataloader, valid_dataloader = get_train_and_valid_dataloaders( full_dataset, batch_size)
+
+    callbacks = [
+        EarlyStopping(monitor="loss/valid",patience=patience),   
+    ]
+
+    trainer = pl.Trainer(
+        max_epochs=max_epochs,
+        callbacks=callbacks,
+        gpus=0,
+    )
+
+    trainer.fit(transition_model,train_dataloader, valid_dataloader)
+    
         
 
-def fit_value_model_to_data(value_model,transition_tensors : dict):
-    state_tensor = transition_tensors["state"]
-    state_value_tensor = transition_tensors["state_value"]
+def fit_value_model_to_data(value_model,transition_tensors : dict, hparams: dict):
+    max_epochs = hparams["value_model"]["max_epochs"]
+    batch_size = hparams["value_model"]["batch_size"]
+    patience   = hparams["value_model"]["patience"]
 
-    num_states = len(state_tensor)
-    batch_size = 128
-    num_iteration_steps = 50
+    full_dataset = TransitionDataset(transition_tensors, ["state","state_value"])
 
-    optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
-    criterion = nn.MSELoss()
+    train_dataloader, valid_dataloader = get_train_and_valid_dataloaders( full_dataset, batch_size)
 
-    for step_i in trange(num_iteration_steps,desc="Value fitting epochs"):
+    callbacks = [
+        EarlyStopping(monitor="loss/valid",patience=patience),   
+    ]
 
-        for batch_indicies in generate_batch_indicies(batch_size, num_states):
+    trainer = pl.Trainer(
+        max_epochs=max_epochs,
+        callbacks=callbacks,
+        gpus=0,
+    )
 
-            batch_state_tensor = state_tensor[batch_indicies]
-            batch_value_target_tensor = state_value_tensor[batch_indicies]
-
-            # compute the value for our current state
-            batch_value_tensor = value_model(batch_state_tensor)
-
-            loss = criterion(batch_value_tensor, batch_value_target_tensor)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+    trainer.fit(value_model,train_dataloader, valid_dataloader)
 
 
 def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
@@ -211,54 +249,41 @@ def update_dataset_with_next_best_state(transition_model, value_model, transitio
         best_next_value_tensor[batch_indicies] = batch_best_next_value_tensor
 
 
-def iterate_value_through_state_space( transition_model, value_model,transition_dataset : dict):
+def iterate_value_through_state_space( transition_model, value_model,transition_dataset : dict, hparams: dict):
     
-    state_tensor = transition_dataset["state"]
-    reward_tensor = transition_dataset["state_reward"]
-
-    num_transitions = len(state_tensor)
-    batch_size = 1024
-    num_iteration_steps = 100
+    num_value_iteration_steps = hparams["value_iteration_steps"]
     
-    optimizer = torch.optim.Adam(value_model.parameters(),lr=0.001)
-    criterion = nn.MSELoss()
-
-    for step_i in trange(num_iteration_steps, desc="Value Iteration Steps"):
+    for step_i in trange(num_value_iteration_steps, desc="Value Iteration Steps"):
 
         update_dataset_with_next_best_state(transition_model, value_model,transition_dataset)
 
         transition_dataset["state_value"] = transition_dataset["state_reward"] + transition_dataset["best_next_value"]
 
-        fit_value_model_to_data(value_model,transition_dataset)
+        fit_value_model_to_data(value_model,transition_dataset, hparams)
 
         plot_value_on_phase_plot(value_model,f"figures/value_step_{step_i}.png")
 
 
-def fit_actor_model_to_data(actor_model, transition_dataset : dict):
-    state_tensor = transition_dataset["state"]
-    best_action_tensor = transition_dataset["best_action"]
+def fit_actor_model_to_data(actor_model, transition_tensors : dict, hparams:dict):
+    max_epochs = hparams["actor_model"]["max_epochs"]
+    batch_size = hparams["actor_model"]["batch_size"]
+    patience   = hparams["actor_model"]["patience"]
 
-    num_states = len(state_tensor)
-    batch_size = 128
-    num_epochs = 100
+    full_dataset = TransitionDataset(transition_tensors, ["state","best_action"])
 
-    optimizer = torch.optim.Adam(actor_model.parameters(),lr=0.001)
-    criterion = nn.MSELoss()
+    train_dataloader, valid_dataloader = get_train_and_valid_dataloaders( full_dataset, batch_size)
 
-    for step_i in trange(num_epochs,desc="Action fitting epochs"):
+    callbacks = [
+        EarlyStopping(monitor="loss/valid",patience=patience),   
+    ]
 
-        for batch_indicies in generate_batch_indicies(batch_size, num_states):
+    trainer = pl.Trainer(
+        max_epochs=max_epochs,
+        callbacks=callbacks,
+        gpus=0,
+    )
 
-            batch_state_tensor = state_tensor[batch_indicies]
-            batch_best_action_tensor = best_action_tensor[batch_indicies]
-
-            batch_action_tensor = actor_model(batch_state_tensor)
-
-            loss = criterion(batch_action_tensor, batch_best_action_tensor)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+    trainer.fit(actor_model, train_dataloader, valid_dataloader)
 
 
 def run_actor_in_environment(actor_model):
