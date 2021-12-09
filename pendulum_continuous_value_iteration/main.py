@@ -80,9 +80,7 @@ def main():
     # fit the transition model to the data
     fit_transition_model_to_data(transition_model, transition_dataset, hparams)
   
-    fit_value_model_to_data(value_model,transition_dataset,hparams)
-
-    plot_value_on_phase_plot(value_model,"figures/value_rewards_only.png")
+    
 
     iterate_value_through_state_space( transition_model, value_model,transition_dataset,hparams)
     
@@ -174,7 +172,20 @@ def fit_transition_model_to_data(transition_model: pl.LightningModule ,transitio
 
     trainer.fit(transition_model,train_dataloader, valid_dataloader)
     
-        
+
+def normalize_state_values_inplace(transition_tensors):
+    state_values = transition_tensors["state_value"]
+
+    min_value = state_values.min()
+    max_value = state_values.max()
+
+    scale = max_value - min_value
+    offset = min_value
+
+    state_values -= offset
+    state_values /= scale
+
+    return scale,offset
 
 def fit_value_model_to_data(value_model,transition_tensors : dict, hparams: dict):
     max_epochs = hparams["value_model"]["max_epochs"]
@@ -249,17 +260,25 @@ def update_dataset_with_next_best_state(transition_model, value_model, transitio
         best_next_value_tensor[batch_indicies] = batch_best_next_value_tensor
 
 
-def iterate_value_through_state_space( transition_model, value_model,transition_dataset : dict, hparams: dict):
+def iterate_value_through_state_space( transition_model, value_model,transition_tensors : dict, hparams: dict):
     
     num_value_iteration_steps = hparams["value_iteration_steps"]
+
+    scale, offset = normalize_state_values_inplace(transition_tensors)
+
+    fit_value_model_to_data(value_model,transition_tensors,hparams)
+
+    plot_value_on_phase_plot(value_model,"figures/value_rewards_only.png")
     
     for step_i in trange(num_value_iteration_steps, desc="Value Iteration Steps"):
 
-        update_dataset_with_next_best_state(transition_model, value_model,transition_dataset)
+        update_dataset_with_next_best_state(transition_model, value_model,transition_tensors)
 
-        transition_dataset["state_value"] = transition_dataset["state_reward"] + transition_dataset["best_next_value"]
+        transition_tensors["state_value"] = transition_tensors["state_reward"] + transition_tensors["best_next_value"] * scale
 
-        fit_value_model_to_data(value_model,transition_dataset, hparams)
+        scale, offset = normalize_state_values_inplace(transition_tensors)
+
+        fit_value_model_to_data(value_model,transition_tensors, hparams)
 
         plot_value_on_phase_plot(value_model,f"figures/value_step_{step_i}.png")
 
