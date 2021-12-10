@@ -43,7 +43,7 @@ def main():
             "cosine_annealing_t_max" : 200,
             "max_epochs" : 200,
             "batch_size" : 128,
-            "patience" : 10,
+            "patience" : 3,
         },
 
         "actor_model":
@@ -80,8 +80,6 @@ def main():
     # fit the transition model to the data
     fit_transition_model_to_data(transition_model, transition_dataset, hparams)
   
-    
-
     iterate_value_through_state_space( transition_model, value_model,transition_dataset,hparams)
     
     plot_value_on_phase_plot(value_model,"figures/value_final.png")
@@ -129,27 +127,6 @@ def collect_transition_dataset(hparams):
 
     return transition_recorder.get_dict_of_tensors()
 
-def split_dataset_into_train_and_valid(full_dataset):
-
-    valid_ratio = 0.25
-
-    # Compute train and valid lenghts
-    valid_length = int(len(full_dataset) * valid_ratio)
-    train_length = len(full_dataset)-valid_length
-
-    # Split out train and valid datasets
-    train_dataset, valid_dataset =  random_split(full_dataset, [train_length,valid_length])
-
-    return train_dataset, valid_dataset
-
-def get_train_and_valid_dataloaders(full_dataset,batch_size):
-
-    train_dataset, valid_dataset = split_dataset_into_train_and_valid(full_dataset)
-
-    train_dataloader = DataLoader(train_dataset,batch_size=batch_size, shuffle=True)
-    valid_dataloader = DataLoader(valid_dataset,batch_size=batch_size, shuffle=False)
-
-    return train_dataloader, valid_dataloader
 
 def fit_transition_model_to_data(transition_model: pl.LightningModule ,transition_tensors : dict, hparams: dict):
     max_epochs = hparams["transition_model"]["max_epochs"]
@@ -173,20 +150,6 @@ def fit_transition_model_to_data(transition_model: pl.LightningModule ,transitio
     trainer.fit(transition_model,train_dataloader, valid_dataloader)
     
 
-def normalize_state_values_inplace(transition_tensors):
-    state_values = transition_tensors["state_value"]
-
-    min_value = state_values.min()
-    max_value = state_values.max()
-
-    scale = max_value - min_value
-    offset = min_value
-
-    state_values -= offset
-    state_values /= scale
-
-    return scale,offset
-
 def fit_value_model_to_data(value_model,transition_tensors : dict, hparams: dict):
     max_epochs = hparams["value_model"]["max_epochs"]
     batch_size = hparams["value_model"]["batch_size"]
@@ -209,29 +172,52 @@ def fit_value_model_to_data(value_model,transition_tensors : dict, hparams: dict
     trainer.fit(value_model,train_dataloader, valid_dataloader)
 
 
-def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
-    num_optimizer_steps = 100
-    max_action = 2.0
+def split_dataset_into_train_and_valid(full_dataset):
 
-    batch_action_tensor = nn.Parameter(torch.zeros(len(batch_state_tensor),1 ))
+    valid_ratio = 0.25
 
-    optimizer = torch.optim.Adam([batch_action_tensor],lr=0.01)
+    # Compute train and valid lenghts
+    valid_length = int(len(full_dataset) * valid_ratio)
+    train_length = len(full_dataset)-valid_length
 
-    for step_i in range(num_optimizer_steps):
+    # Split out train and valid datasets
+    train_dataset, valid_dataset =  random_split(full_dataset, [train_length,valid_length])
 
-        next_state = transition_model(batch_state_tensor, batch_action_tensor)
-        next_state_value = value_model(next_state)
+    return train_dataset, valid_dataset
 
-        loss = -next_state_value.mean()
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+def get_train_and_valid_dataloaders(full_dataset,batch_size):
 
-        batch_action_tensor.data = batch_action_tensor.data.clamp(-max_action,max_action)
+    train_dataset, valid_dataset = split_dataset_into_train_and_valid(full_dataset)
 
-    return batch_action_tensor.data
+    train_dataloader = DataLoader(train_dataset,batch_size=batch_size, shuffle=True)
+    valid_dataloader = DataLoader(valid_dataset,batch_size=batch_size, shuffle=False)
 
+    return train_dataloader, valid_dataloader
+
+def iterate_value_through_state_space( transition_model, value_model,transition_tensors : dict, hparams: dict):
+    
+    num_value_iteration_steps = hparams["value_iteration_steps"]
+
+    transition_tensors["state_value"], value_min, value_max = normalize_tensor_and_return_old_range(transition_tensors["state_value"])
+
+    fit_value_model_to_data(value_model,transition_tensors,hparams)
+
+    plot_value_on_phase_plot(value_model,"figures/value_rewards_only.png")
+    
+    for step_i in trange(num_value_iteration_steps, desc="Value Iteration Steps"):
+
+        update_dataset_with_next_best_state(transition_model, value_model, transition_tensors)
+
+        transition_tensors["best_next_value"] = unnormalize_tensor_to_range(transition_tensors["best_next_value"], value_min, value_max)
+
+        transition_tensors["state_value"] = transition_tensors["state_reward"] + transition_tensors["best_next_value"]
+
+        transition_tensors["state_value"], value_min, value_max = normalize_tensor_and_return_old_range(transition_tensors["state_value"])
+
+        fit_value_model_to_data(value_model,transition_tensors, hparams)
+
+        plot_value_on_phase_plot(value_model,f"figures/value_step_{step_i}.png")
 
 def update_dataset_with_next_best_state(transition_model, value_model, transition_dataset):
 
@@ -260,28 +246,61 @@ def update_dataset_with_next_best_state(transition_model, value_model, transitio
         best_next_value_tensor[batch_indicies] = batch_best_next_value_tensor
 
 
-def iterate_value_through_state_space( transition_model, value_model,transition_tensors : dict, hparams: dict):
-    
-    num_value_iteration_steps = hparams["value_iteration_steps"]
+def find_best_action_for_batch_of_states(transition_model, value_model, batch_state_tensor):
+    num_optimizer_steps = 100
+    max_action = 2.0
 
-    scale, offset = normalize_state_values_inplace(transition_tensors)
+    batch_action_tensor = nn.Parameter(torch.zeros(len(batch_state_tensor),1 ))
 
-    fit_value_model_to_data(value_model,transition_tensors,hparams)
+    optimizer = torch.optim.Adam([batch_action_tensor],lr=0.01)
 
-    plot_value_on_phase_plot(value_model,"figures/value_rewards_only.png")
-    
-    for step_i in trange(num_value_iteration_steps, desc="Value Iteration Steps"):
+    for step_i in range(num_optimizer_steps):
 
-        update_dataset_with_next_best_state(transition_model, value_model,transition_tensors)
+        next_state = transition_model(batch_state_tensor, batch_action_tensor)
+        next_state_value = value_model(next_state)
 
-        transition_tensors["state_value"] = transition_tensors["state_reward"] + transition_tensors["best_next_value"] * scale
+        loss = -next_state_value.mean()
 
-        scale, offset = normalize_state_values_inplace(transition_tensors)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-        fit_value_model_to_data(value_model,transition_tensors, hparams)
+        batch_action_tensor.data = batch_action_tensor.data.clamp(-max_action,max_action)
 
-        plot_value_on_phase_plot(value_model,f"figures/value_step_{step_i}.png")
+    return batch_action_tensor.data
 
+
+
+
+def get_min_and_max_from_tensor(tensor):
+    return tensor.min(), tensor.max()
+
+
+def map_tensor_range(tensor, min_in, max_in, min_out, max_out):
+    scale_in = max_in - min_in
+    offset_in = min_in
+
+    scale_out = max_out - min_out
+    offset_out = min_out
+
+    tensor = tensor - offset_in
+    tensor *= scale_out/scale_in
+    tensor += offset_out
+
+    return tensor
+
+
+def normalize_tensor_and_return_old_range(tensor):
+    range_min, range_max = get_min_and_max_from_tensor(tensor)
+
+    tensor = map_tensor_range(tensor,range_min, range_max, 0.0, 1.0 )
+
+    return tensor, range_min, range_max
+
+
+def unnormalize_tensor_to_range(tensor,range_min, range_max):
+
+    return map_tensor_range(tensor,0.0, 1.0, range_min, range_max )
 
 def fit_actor_model_to_data(actor_model, transition_tensors : dict, hparams:dict):
     max_epochs = hparams["actor_model"]["max_epochs"]
