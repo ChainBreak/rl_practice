@@ -4,7 +4,7 @@ import torch.nn as nn
 from env.pendulum import PendulumEnv
 from tqdm import trange, tqdm
 import gym
-
+import random
 from torch.utils.data import DataLoader, random_split
 
 import pytorch_lightning as pl
@@ -23,8 +23,9 @@ from models.actor_model import LitActorModel
 def main():
     hparams = {
 
-        "num_collection_runs": 800,
-        "num_samples_per_run": 30,
+        "num_episodes" : 20,
+        "num_collection_runs": 1,
+        "num_samples_per_run": 1000,
 
         "transition_model":
         {
@@ -57,61 +58,55 @@ def main():
 
     }
 
-    # Collect transition data from the simulator
-    transition_dataset = collect_transition_dataset(hparams)
 
-    num_states = len(transition_dataset["state"])
-    transition_dataset["state_value"] = transition_dataset["state_reward"].clone()
-    transition_dataset["best_action"] = torch.zeros(num_states,1)
-    transition_dataset["best_next_state"] = torch.zeros(num_states,3)
-    transition_dataset["best_next_value"] = torch.zeros(num_states,1)
+    run_rl_iteration(hparams)
 
-    
-    phase_plot = PendulumPhasePlot()
-    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["next_state"],"figures/raw_transitions.png")
-    
-    # Instanciate models
-    transition_model = LitTransitionModel(**hparams["transition_model"])
-    value_model = LitValueModel(**hparams["value_model"])
+
+def run_rl_iteration(hparams):
+
+    num_episodes = hparams["num_episodes"]
+
+    transition_recorder = TransitionRecorder()
+
     actor_model = LitActorModel(**hparams["actor_model"])
 
-    plot_value_on_phase_plot(value_model,"figures/value_random_weights.png")
-    
-    # fit the transition model to the data
-    fit_transition_model_to_data(transition_model, transition_dataset, hparams)
-  
-    iterate_value_through_state_space( transition_model, value_model,transition_dataset,hparams)
-    
-    plot_value_on_phase_plot(value_model,"figures/value_final.png")
+    for episode_i in range(num_episodes):
 
-    update_dataset_with_next_best_state(transition_model,value_model,transition_dataset)
+        print(f"\n\n### Episode {episode_i:03} ###")
 
-    phase_plot = PendulumPhasePlot()
-    phase_plot.plot_transitions_on_phase_plot(transition_dataset["state"],transition_dataset["best_next_state"],"figures/best_transitions.png")
+        prob_random_action = calculate_probability_of_random_action(episode_i, num_episodes)
 
-    fit_actor_model_to_data(actor_model, transition_dataset, hparams)
+        collect_data_with_current_policy(actor_model, transition_recorder, prob_random_action, hparams)
+
+        actor_model = get_new_actor_trained_from_all_transition_data(transition_recorder, hparams)
 
     run_actor_in_environment(actor_model)
 
 
+def calculate_probability_of_random_action(episode_i,num_episodes):
+    """Starts at 1 and goes to 0 over the episodes"""
+    prob = 1.0 - episode_i / num_episodes
+    return prob
 
-def collect_transition_dataset(hparams):
-    """Run the environment a few times and record all the transitions.
-    """
+
+def collect_data_with_current_policy(actor_model, transition_recorder, prob_random_action, hparams):
+
     num_collection_runs = hparams["num_collection_runs"]
     num_samples_per_run = hparams["num_samples_per_run"]
 
     env = PendulumEnv()
 
-    transition_recorder = TransitionRecorder()
-
     for _ in trange(num_collection_runs):
         state = env.reset()
 
         for _ in range(num_samples_per_run):
-            action = env.action_space.sample()
-            # env.render()
-            next_state, state_reward, action_cost = env.step(action) # take a random action
+            env.render()
+            if random.random() < prob_random_action:
+                action = env.action_space.sample()
+            else:
+                action = get_action_from_actor_model(actor_model,state)
+            
+            next_state, state_reward, action_cost = env.step(action) 
 
             transition_recorder.add_transition(
                 state=state,
@@ -125,7 +120,57 @@ def collect_transition_dataset(hparams):
 
     env.close()
 
-    return transition_recorder.get_dict_of_tensors()
+
+def get_action_from_actor_model(actor_model,state):
+    
+    state_tensor = torch.tensor(state).unsqueeze(0)
+
+    with torch.no_grad():
+        action_tensor = actor_model(state_tensor)
+
+    action = action_tensor.squeeze(0).numpy()
+
+    return action
+
+def get_new_actor_trained_from_all_transition_data(transition_recorder, hparams):
+
+    transition_tensors = transition_recorder.get_dict_of_tensors()
+
+    num_states = len(transition_tensors["state"])
+
+    transition_tensors["state_value"] = transition_tensors["state_reward"].clone()
+    transition_tensors["best_action"] = torch.zeros(num_states,1)
+    transition_tensors["best_next_state"] = torch.zeros(num_states,3)
+    transition_tensors["best_next_value"] = torch.zeros(num_states,1)
+
+    
+    phase_plot = PendulumPhasePlot()
+    phase_plot.plot_transitions_on_phase_plot(transition_tensors["state"], transition_tensors["next_state"], "figures/raw_transitions.png")
+    
+    # Instanciate models
+    transition_model = LitTransitionModel(**hparams["transition_model"])
+    value_model = LitValueModel(**hparams["value_model"])
+    actor_model = LitActorModel(**hparams["actor_model"])
+    
+
+    plot_value_on_phase_plot(value_model,"figures/value_random_weights.png")
+    
+    # fit the transition model to the data
+    fit_transition_model_to_data(transition_model, transition_tensors, hparams)
+  
+    iterate_value_through_state_space( transition_model, value_model, transition_tensors,hparams)
+    
+    plot_value_on_phase_plot(value_model,"figures/value_final.png")
+
+    update_dataset_with_next_best_state(transition_model,value_model,transition_tensors)
+
+    phase_plot = PendulumPhasePlot()
+    phase_plot.plot_transitions_on_phase_plot(transition_tensors["state"],transition_tensors["best_next_state"], "figures/best_transitions.png")
+
+    fit_actor_model_to_data(actor_model, transition_tensors, hparams)
+
+    return actor_model
+
 
 
 def fit_transition_model_to_data(transition_model: pl.LightningModule ,transition_tensors : dict, hparams: dict):
@@ -145,6 +190,9 @@ def fit_transition_model_to_data(transition_model: pl.LightningModule ,transitio
         max_epochs=max_epochs,
         callbacks=callbacks,
         gpus=0,
+        checkpoint_callback=False,
+        logger=False
+
     )
 
     trainer.fit(transition_model,train_dataloader, valid_dataloader)
@@ -167,6 +215,8 @@ def fit_value_model_to_data(value_model,transition_tensors : dict, hparams: dict
         max_epochs=max_epochs,
         callbacks=callbacks,
         gpus=0,
+        checkpoint_callback=False,
+        logger=False
     )
 
     trainer.fit(value_model,train_dataloader, valid_dataloader)
@@ -319,9 +369,14 @@ def fit_actor_model_to_data(actor_model, transition_tensors : dict, hparams:dict
         max_epochs=max_epochs,
         callbacks=callbacks,
         gpus=0,
+        checkpoint_callback=False,
+        logger=False
     )
 
     trainer.fit(actor_model, train_dataloader, valid_dataloader)
+
+
+
 
 
 def run_actor_in_environment(actor_model):
@@ -336,12 +391,8 @@ def run_actor_in_environment(actor_model):
 
         for _ in range(num_samples_per_run):
             env.render()
-            state_tensor = torch.tensor(state).unsqueeze(0)
-
-            with torch.no_grad():
-                action_tensor = actor_model(state_tensor)
-
-            action = action_tensor.squeeze(0).numpy()
+            
+            action = get_action_from_actor_model(actor_model,state)
 
             state, state_reward, action_cost = env.step(action) # take a random action
 
