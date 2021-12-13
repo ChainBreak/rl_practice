@@ -23,7 +23,7 @@ from models.actor_model import LitActorModel
 def main():
     hparams = {
 
-        "num_episodes" : 20,
+        "num_episodes" : 10,
         "num_collection_runs": 1,
         "num_samples_per_run": 1000,
 
